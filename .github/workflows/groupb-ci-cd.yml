@@ -1,0 +1,217 @@
+# > [!IMPORTANT]
+# > This project does not accept fully AI-generated pull requests. AI tools may only be used for assistance. You must understand and take responsibility for every change you submit.
+# >
+# > Read and follow:
+# > • [AGENTS.md](./AGENTS.md)
+# > • [CONTRIBUTING.md](./CONTRIBUTING.md)
+
+name: Group B CI/CD
+
+on:
+  push:
+    branches: [main, 'codex/groupb-cicd']
+    tags: ['groupb-v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: groupb-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CI: 'true'
+
+jobs:
+  metadata:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate release version and source
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=100.0.0
+          if [[ "$REF_TYPE" == tag ]]; then
+            if [[ ! "$REF_NAME" =~ ^groupb-v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo '::error::Release tags must use groupb-vMAJOR.MINOR.PATCH.'
+              exit 1
+            fi
+            version="${REF_NAME#groupb-v}"
+            VERSION="$version" python3 - <<'PYCODE'
+          import os
+          parts = os.environ['VERSION'].split('.')
+          limits = (255, 255, 65535)
+          if any(str(int(p)) != p or int(p) > limit for p, limit in zip(parts, limits)) or int(parts[0]) == 0:
+              raise SystemExit('Use canonical integers: major 1-255, minor 0-255, patch 0-65535.')
+          PYCODE
+            git merge-base --is-ancestor HEAD origin/main
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  check:
+    name: Build and test
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: corretto
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Install headless GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb libgtk-3-0 libasound2t64
+      - name: Run checks and compile all modules
+        run: xvfb-run --auto-servernum ./gradlew --no-daemon --stacktrace --max-workers=2 build
+      - name: Preserve test and static analysis reports
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/
+            **/build/test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+  package:
+    name: Package (${{ matrix.platform }})
+    needs: [metadata, check]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            platform: linux-x64
+            target: Ubuntu-22.04
+            output: ubuntu-22.04
+          - runner: windows-latest
+            platform: windows-x64
+            target: Windows-latest
+            output: windows-latest
+          - runner: macos-15
+            platform: macos-arm64
+            target: Macos-15
+            output: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.metadata.outputs.version }}
+      VERSION_INFO: ${{ github.sha }}
+      OSXCERT: 'false'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6
+        with:
+          distribution: corretto
+          java-version: '25'
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+      - name: Install Linux packaging dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y fakeroot rpm xvfb libgtk-3-0 libasound2
+      - name: Check Windows installer tooling
+        if: runner.os == 'Windows'
+        run: candle -?
+      - name: Prepare installer icons
+        run: |
+          cp jabgui/buildres/linux/JabRef.png jabgui/
+          cp jabgui/buildres/windows/JabRef.ico jabgui/
+      - name: Build platform installers
+        env:
+          PACKAGE_TARGET: ${{ matrix.target }}
+        run: ./gradlew --no-daemon --stacktrace --max-workers=2 ":jabgui:jpackage$PACKAGE_TARGET"
+      - name: Smoke test packaged launcher
+        env:
+          PACKAGE_DIRECTORY: jabgui/build/packages/${{ matrix.output }}
+        run: |
+          case "$RUNNER_OS" in
+            Linux) xvfb-run --auto-servernum "$PACKAGE_DIRECTORY/JabRef/bin/JabRef" --help ;;
+            Windows) "$PACKAGE_DIRECTORY/JabRef/JabRef.exe" --help ;;
+            macOS) "$PACKAGE_DIRECTORY/JabRef.app/Contents/MacOS/JabRef" --help ;;
+            *) exit 1 ;;
+          esac
+      - name: Collect required installers
+        env:
+          PACKAGE_DIRECTORY: jabgui/build/packages/${{ matrix.output }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          python3 - <<'PYCODE'
+          import os
+          import shutil
+          from pathlib import Path
+          platform = os.environ['PLATFORM']
+          suffixes = {'linux-x64': ('.deb', '.rpm'), 'windows-x64': ('.msi',), 'macos-arm64': ('.dmg', '.pkg')}[platform]
+          source = Path(os.environ['PACKAGE_DIRECTORY'])
+          output = Path('dist')
+          output.mkdir()
+          for suffix in suffixes:
+              files = sorted(source.glob('*' + suffix))
+              if not files:
+                  raise SystemExit(f'Missing {suffix} installer in {source}')
+              for file in files:
+                  shutil.copy2(file, output / (platform + '-' + file.name))
+          PYCODE
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: installers-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: [check, package]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/groupb-v') && github.repository == 'prestonvitosh/GroupB_jabref'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          pattern: installers-*
+          merge-multiple: true
+          path: dist
+      - name: Generate SHA-256 checksums
+        working-directory: dist
+        run: sha256sum -- *.deb *.rpm *.msi *.dmg *.pkg > SHA256SUMS.txt
+      - name: Create release with verified build artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$RELEASE_TAG" dist/* --verify-tag \
+            --title "Group B JabRef $RELEASE_TAG" \
+            --notes 'Group B build of JabRef. Includes Linux x64, Windows x64, and macOS Apple Silicon installers plus SHA-256 checksums. Installers are unsigned; this is an independent fork build.'
