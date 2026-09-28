@@ -203,7 +203,7 @@ The user requested an expedited finish while the local packaging retry was runni
 
 ### 13. Default-branch publication gate
 
-Automatic approval review rejected the attempt to push the setup to `main`, stating that approval to commit and push did not explicitly authorize mutation of the shared default branch. The rejected command did not run. Requested specific approval to push the reviewed setup to `main`; no workaround was used. The setup branch and its live Actions run are already published.
+Automatic approval review rejected the attempt to push the setup to `main`, stating that approval to commit and push did not explicitly authorize mutation of the shared default branch. The rejected command did not run. Requested specific approval to push the reviewed setup to `main`; the user replied “Approve push to main.” Publication proceeds under this explicit authorization; no workaround was used. The setup branch and its live Actions run are already published.
 
 ## Repository policy and final review
 
