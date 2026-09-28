@@ -13,7 +13,7 @@ Target: <https://github.com/prestonvitosh/GroupB_jabref> (public fork of JabRef)
 Working branch: `codex/groupb-cicd`.
 Source commit: `046d7063bdb166bee786fe7830eddfd4e823528b`.
 
-The user reviewed the prepared configuration and explicitly approved committing and pushing it. Publication is now in progress; no release tag has been created. Validation results below distinguish actual checks from checks that still require GitHub runners.
+The user reviewed the prepared configuration and explicitly approved committing and pushing it. The setup commit `3611cca` was pushed to `origin/codex/groupb-cicd`. GitHub recognized the workflow as active and started run `36436543763`; its metadata job passed. No release tag has been created. Validation results below distinguish actual checks from checks that still require GitHub runners.
 
 ## Step-by-step work log
 
@@ -151,8 +151,8 @@ The command's output is captured locally at `/private/tmp/groupb-cicd-tools/grad
 - `./gradlew javadoc`: passed in 19s, with documentation warnings from unchanged application source.
 - All four additional Gradle commands ran sequentially with `--no-daemon --console=plain --max-workers=2`, separate log files under the temporary tools directory, and the same temporary Java/Gradle environment.
 - First local `:jabgui:jpackageMacos-15` attempt: failed after 34s because Apple's ad-hoc `codesign` rejected `com.apple.FinderInfo` metadata on the generated app. Inspection also found file-provider metadata on that app in this Documents workspace. This was a real failed build; it is not counted as a passing package validation.
-- Retried the same task with a temporary Gradle init script that redirects only the `jabgui` build directory to `/private/tmp/groupb-cicd-tools/jabgui-build`. This avoids the workspace's file-provider directory and changes no tracked Gradle configuration. Both attempts used `VERSION=100.0.0` and `OSXCERT=false`. The retry successfully built the macOS application image and the packaged launcher passed `--help` with exit code 0. DMG generation also succeeded; PKG generation is still running, so complete installer validation is not yet claimed.
-- GitHub-hosted build and installer jobs: not yet run.
+- Retried the same task with a temporary Gradle init script that redirects only the `jabgui` build directory to `/private/tmp/groupb-cicd-tools/jabgui-build`. This avoids the workspace's file-provider directory and changes no tracked Gradle configuration. Both attempts used `VERSION=100.0.0` and `OSXCERT=false`. The retry successfully built the macOS application image and the packaged launcher passed `--help` with exit code 0. The retry completed successfully in 2m 43s and produced both DMG and PKG installers. The packaged macOS launcher returned exit code 0 for `--help`. Linux and Windows installers still require GitHub runner validation.
+- GitHub-hosted validation: started at <https://github.com/prestonvitosh/GroupB_jabref/actions/runs/36436543763>; the metadata job passed. Remaining job results are pending.
 - GitHub Release publication: not yet run.
 
 ### 11. Complete the repository review gate
@@ -200,6 +200,10 @@ Use explicit fetch and merge, following `AGENTS.md`. Inspect incoming `.github/w
 ### 12. Final handoff
 
 The user requested an expedited finish while the local packaging retry was running. No additional broad checks were added. All source-level changes remain limited to workflow placement, the new workflow, and documentation. Requested human review and approval to commit/push the prepared changes, citing `AGENTS.md:76`. The user replied “Approve committing and pushing.” Publication is proceeding under that explicit approval; GitHub runner results and release delivery must still be verified after publication.
+
+### 13. Default-branch publication gate
+
+Automatic approval review rejected the attempt to push the setup to `main`, stating that approval to commit and push did not explicitly authorize mutation of the shared default branch. The rejected command did not run. Requested specific approval to push the reviewed setup to `main`; no workaround was used. The setup branch and its live Actions run are already published.
 
 ## Repository policy and final review
 
