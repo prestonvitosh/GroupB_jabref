@@ -1,6 +1,7 @@
 /// Core library of JabRef: the data model (`org.jabref.model`), the business logic
 /// (`org.jabref.logic`) including importers, exporters, fetchers and search, and the
 /// preferences. Has no JavaFX UI; all other modules build on it.
+/// Bibliography entry caching is provided by [org.jabref.logic.cache.CacheManager].
 ///
 /// Entry points: [org.jabref.model.database.BibDatabaseContext] (an open library),
 /// [org.jabref.model.entry.BibEntry], [org.jabref.logic.importer.ImportFormatReader],
@@ -26,6 +27,7 @@ open module org.jabref.jablib {
     exports org.jabref.logic.preferences;
     exports org.jabref.logic.importer;
     exports org.jabref.logic.bibtex;
+    exports org.jabref.logic.cache;
     exports org.jabref.logic.browserext;
     exports org.jabref.logic.citationkeypattern;
     exports org.jabref.logic.exporter;
