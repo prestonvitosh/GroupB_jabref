@@ -541,15 +541,14 @@ public class DBMSSynchronizer implements DatabaseSynchronizer {
         }
     }
 
-    /// Database worker. A dead connection takes the synchronizer offline and the change is
-    /// recorded for later; a failure on a live connection is transient and only reported
-    /// (repeating that write would fail the same way).
+    /// Database worker. Keep failed writes for replay even when the connection is still valid:
+    /// a successful connection check does not mean the modification reached the database.
+    // [impl->req~shared-database.failed-writes-remain-pending~1]
     private void handleWriteFailure(String message, SQLException exception, Runnable record) {
         LOGGER.error(message, exception);
+        record.run();
         if (checkCurrentConnection()) {
             eventBus.post(new SharedWriteFailedEvent(bibDatabaseContext));
-        } else {
-            record.run();
         }
     }
 

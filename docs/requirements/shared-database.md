@@ -52,6 +52,13 @@ When the connection to the shared database is lost, the user keeps working: ever
 
 Needs: impl
 
+## Failed writes remain pending
+`req~shared-database.failed-writes-remain-pending~1`
+
+When an entry update, insertion, removal, or metadata write fails with a database error, the pending modification is persisted even if the connection remains valid. It remains available for replay on reconnection or reopening the database. A successful entry update clears its pending record.
+
+Needs: impl, utest
+
 ## The connection is re-established automatically
 `req~shared-database.automatic-reconnect~1`
 

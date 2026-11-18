@@ -2,23 +2,47 @@ package org.jabref.logic.shared;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.jabref.logic.bibtex.FieldPreferences;
+import org.jabref.logic.citationkeypattern.GlobalCitationKeyPatterns;
+import org.jabref.logic.exporter.MetaDataSerializer;
+import org.jabref.logic.shared.notifications.Notifier;
+import org.jabref.logic.util.TaskExecutor;
+import org.jabref.model.database.BibDatabaseContext;
+import org.jabref.model.database.BibDatabaseMode;
+import org.jabref.model.database.event.EntriesAddedEvent;
+import org.jabref.model.database.event.EntriesRemovedEvent;
 import org.jabref.model.entry.BibEntry;
+import org.jabref.model.entry.event.EntriesEventSource;
 import org.jabref.model.entry.field.StandardField;
 import org.jabref.model.entry.types.StandardEntryType;
+import org.jabref.model.metadata.event.MetaDataChangeSource;
+import org.jabref.model.metadata.event.MetaDataChangedEvent;
+import org.jabref.model.util.DummyFileUpdateMonitor;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.MockedConstruction;
+import org.postgresql.jdbc.PgConnection;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockConstruction;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 class OfflineChangesTest {
 
@@ -243,5 +267,64 @@ class OfflineChangesTest {
         OfflineChanges.Recorded recorded = changes.peek();
         assertEquals(Map.of(), recorded.changedEntries());
         assertEquals(Set.of(entry.getId()), recorded.newEntries().keySet());
+    }
+
+    // [utest->req~shared-database.failed-writes-remain-pending~1]
+    @ParameterizedTest
+    @ValueSource(strings = {"update", "insert", "remove", "metadata"})
+    void failedWriteOnValidConnectionSurvivesRestart(String operation) throws Exception {
+        BibDatabaseContext context = new BibDatabaseContext();
+        GlobalCitationKeyPatterns patterns = GlobalCitationKeyPatterns.fromPattern("[auth][year]");
+        PgConnection sqlConnection = mock(PgConnection.class);
+        when(sqlConnection.isValid(0)).thenReturn(true);
+        DatabaseConnection connection = mock(DatabaseConnection.class);
+        when(connection.getProperties()).thenReturn(properties);
+        when(connection.getConnection()).thenReturn(sqlConnection);
+        BibEntry entry = sharedEntry(1, 3);
+        TaskExecutor taskExecutor = mock(TaskExecutor.class);
+        try (MockedConstruction<DBMSProcessor> processors = mockConstruction(DBMSProcessor.class, (processor, _) -> {
+            when(processor.checkBaseIntegrity()).thenReturn(true);
+        });
+             MockedConstruction<Notifier> notifiers = mockConstruction(Notifier.class)) {
+            DBMSSynchronizer synchronizer = new DBMSSynchronizer(context, ',', mock(FieldPreferences.class), patterns,
+                    new DummyFileUpdateMonitor(), "test", taskExecutor, Runnable::run, Runnable::run, directory);
+            synchronizer.openSharedDatabase(connection);
+            DBMSProcessor processor = processors.constructed().getFirst();
+            SQLException failure = new SQLException("Write failed while connection remains valid");
+            switch (operation) {
+                case "update" -> {
+                    doThrow(failure).when(processor).updateEntry(entry);
+                    synchronizer.synchronizeSharedEntry(entry);
+                }
+                case "insert" -> {
+                    doThrow(failure).when(processor).insertEntries(List.of(entry));
+                    synchronizer.listen(new EntriesAddedEvent(List.of(entry), EntriesEventSource.LOCAL));
+                }
+                case "remove" -> {
+                    doThrow(failure).when(processor).removeEntries(List.of(entry));
+                    synchronizer.listen(new EntriesRemovedEvent(List.of(entry), EntriesEventSource.LOCAL));
+                }
+                case "metadata" -> {
+                    doThrow(failure).when(processor).setSharedMetaData(any());
+                    context.getMetaData().setMode(BibDatabaseMode.BIBLATEX);
+                    synchronizer.listen(new MetaDataChangedEvent(context.getMetaData(), MetaDataChangeSource.LOCAL));
+                }
+            }
+            verify(sqlConnection).isValid(0);
+            verifyNoInteractions(taskExecutor, notifiers.constructed().getFirst());
+            OfflineChanges.Recorded recorded = OfflineChanges.load(directory, properties).peek();
+            switch (operation) {
+                case "update" -> {
+                    assertEquals(Map.of(1, OfflineChanges.EntryState.of(entry)), recorded.changedEntries());
+                    doNothing().when(processor).updateEntry(entry);
+                    synchronizer.synchronizeSharedEntry(entry);
+                    assertTrue(OfflineChanges.load(directory, properties).isEmpty());
+                }
+                case "insert" -> assertEquals(Map.of(entry.getId(), OfflineChanges.EntryState.of(entry)), recorded.newEntries());
+                case "remove" -> assertEquals(Map.of(1, 3), recorded.removedEntries());
+                case "metadata" -> assertEquals(MetaDataSerializer.getSerializedStringMap(context.getMetaData(), patterns), recorded.metaData());
+            }
+            synchronizer.closeSharedDatabase();
+        }
     }
 }

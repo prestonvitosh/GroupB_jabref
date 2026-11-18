@@ -130,7 +130,11 @@ Metadata has no version: recorded metadata is merged key by key into the current
 The replay ends with a pull.
 Until written, replayed entries are protected from that pull like refused ones.
 
-The user only sees two notifications (connection lost / restored); the notification listener reconnects independently on its own connection.
+SQL write failures also retain the affected changes when the connection is still valid, and emit `SharedWriteFailedEvent` without starting the connection-loss reconnect loop.
+These pending changes survive a restart and are replayed on the next reconnect or reopening of the database; a later successful entry update clears its record.
+A live connection does not currently schedule automatic retries for failed writes.
+
+The notification listener reconnects independently on its own connection.
 
 ## Connection keepalive settings at the PostgreSQL server
 
